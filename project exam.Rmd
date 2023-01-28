@@ -1,0 +1,295 @@
+---
+title: "LSI36001 Clinical Data Mining - Project exam"
+output:
+  html_document:
+    df_print: paged
+---
+```{r}
+library(xlsx)
+library(tidyverse)
+library(survival)
+library(survminer)
+dataLong <- read.xlsx("longitudinal.xlsx",sheetIndex=1)
+dataCV <- read.xlsx("clinical_variables.xlsx", sheetIndex = 1)
+```
+```{r}
+dataCV
+```
+
+```{r}
+length(unique(dataCV$patient_id))
+length(unique(dataLong$patient_id))
+n_of_CA <- dataLong%>% group_by(patient_id)%>%count()
+
+dynRange <- function(vec){
+  sorted_vec <- sort(vec)
+  return(sorted_vec[length(vec)]/sorted_vec[1])
+}
+
+getEligiblePatients <- function(minDate = 0, maxDate=100, minTreatments = 2, data = dataLong){
+  enough_treatments <- data[data$date_relative>=minDate & 
+                              data$date_relative<=maxDate,]%>% 
+                              group_by(patient_id)%>%
+                              count()
+  return(enough_treatments[enough_treatments$n >= minTreatments,])
+}
+
+getPatientData <- function(eligiblePatients=getEligiblePatients(), minDate = 0, maxDate=100, data=dataLong){
+  n <- sum(eligiblePatients$n)
+  patients <- rep(0,n)
+  results <- rep(0,n)
+  time <- rep(0,n)
+  i<-1
+  for (id in eligiblePatients$patient_id) {
+    subset <- data[data$patient_id==id & data$date_relative>=minDate & data$date_relative<=maxDate,]
+    m <- nrow(subset)
+    patients[i:(i+m-1)] <- id
+    results[i:(i+m-1)] <- subset$result
+    time[i:(i+m-1)] <- subset$date_relative
+    i <- i+m
+  }
+  return(data.frame(id = patients, result = results, relative_date = time))
+}
+
+plotPatients <- function(data=getPatientData(), eligible_patients = getEligiblePatients()){
+  plot(x = data[data$id == eligible_patients$patient_id[1],]$relative_date, 
+       y = data[data$id == eligible_patients$patient_id[1],]$result, type='l', 
+       ylim=c(0,max(data$result)))
+  for (id in eligible_patients$patient_id[2:length(eligible_patients$patient_id)]) {
+  subset <- data[data$id == id,]
+  ordered_subset = subset[order(subset$relative_date),]
+  lines(x = ordered_subset$relative_date, y = ordered_subset$result)
+  }
+}
+
+plotScaledPatients <- function(data=scaleResult(), eligible_patients = getEligiblePatients()){
+  plot(x = data[data$id == eligible_patients$patient_id[1],]$relative_date, 
+       y = data[data$id == eligible_patients$patient_id[1],]$corrected_result, type='l', 
+       ylim=c(0,max(data$corrected_result)))
+  for (id in eligible_patients$patient_id[2:length(eligible_patients$patient_id)]) {
+  subset <- data[data$id == id,]
+  ordered_subset = subset[order(subset$relative_date),]
+  lines(x = ordered_subset$relative_date, y = ordered_subset$corrected_result)
+  }
+}
+
+scaleResult <- function(lambda=0.5, data=getPatientData()){
+  data$corrected_results <- (data$result^(lambda)-1)/lambda
+  return(data)
+}
+
+avgChangeRateCA125 <- function(eligible_patients = getEligiblePatients(), data = scaleResult()){
+  all_values <- rep(0, nrow(eligible_patients))
+  j <- 1
+  for (id in eligible_patients$patient_id) {
+    patient <- data[data$id == id,]
+    patient <- patient[order(patient$relative_date),]
+    total_days <- max(patient$relative_date)-min(patient$relative_date)
+    values <- rep(0, nrow(patient)-1)
+    for (i in c(2:nrow((patient)))) {
+      days <- ((patient$relative_date[i]+1)-patient$relative_date[(i-1)])
+      slope <-(patient$corrected_results[i]-patient$corrected_results[(i-1)])/((patient$relative_date[i]+1)-patient$relative_date[(i-1)]) 
+      values[(i-1)] <- slope*days
+    }
+  all_values[j] <- sum(values)/total_days
+  j <- j+1
+  }
+  eligible_patients$result <- all_values
+  return(eligible_patients)
+}
+
+getFinalData2 <- function(eligible_patients = avgChangeRateCA125()){
+  b <-dataCV[dataCV$patient_id %in% eligible_patients$patient_id,]
+  ordered_b <- b[order(b$patient_id),]
+  finalData <- data.frame(id =  eligible_patients$patient_id,
+                        result = eligible_patients$result,
+                        age = ordered_b$age_at_diagnosis,
+                        pfi = ordered_b$platinum_free_interval,
+                        dtp = ordered_b$days_to_progression,
+                        dtd = ordered_b$days_to_death)
+  return(finalData)
+}
+
+getFinalData <- function(minDate=0, maxDate=100, minTreatments=3, lambda=0.5) {
+  enough_treatments <- dataLong[dataLong$date_relative>=minDate & 
+                              dataLong$date_relative<=maxDate,]%>% 
+                              group_by(patient_id)%>%
+                              count()
+  eligible_patients <- enough_treatments[enough_treatments$n >= minTreatments,]
+  
+  n <- sum(eligible_patients$n)
+  patients <- rep(0,n)
+  results <- rep(0,n)
+  time <- rep(0,n)
+  i<-1
+  for (id in eligible_patients$patient_id) {
+    subset <- dataLong[dataLong$patient_id==id & dataLong$date_relative>=minDate & dataLong$date_relative<=maxDate,]
+    m <- nrow(subset)
+    patients[i:(i+m-1)] <- id
+    results[i:(i+m-1)] <- subset$result
+    time[i:(i+m-1)] <- subset$date_relative
+    i <- i+m
+  }
+  eligible_patients_df <- data.frame(id = patients, result = results, relative_date = time)
+  
+  eligible_patients_df$corrected_results <- (eligible_patients_df$result^(lambda)-1)/lambda
+  
+  all_values <- rep(0, nrow(eligible_patients))
+  j <- 1
+  for (id in eligible_patients$patient_id) {
+    patient <- eligible_patients_df[eligible_patients_df$id == id,]
+    patient <- patient[order(patient$relative_date),]
+    total_days <- max(patient$relative_date)-min(patient$relative_date)
+    values <- rep(0, nrow(patient)-1)
+    for (i in c(2:nrow((patient)))) {
+      values[(i-1)] <- (patient$corrected_results[i]-patient$corrected_results[(i-1)])/((patient$relative_date[i]+1)-patient$relative_date[(i-1)])*((patient$relative_date[i]+1)-patient$relative_date[(i-1)])
+    }
+  all_values[j] <- sum(values)/total_days
+  j <- j+1
+  }
+  eligible_patients$result <- all_values
+  
+  b <-dataCV[dataCV$patient_id %in% eligible_patients$patient_id,]
+  ordered_b <- b[order(b$patient_id),]
+  finalData <- data.frame(id =  eligible_patients$patient_id,
+                        result = eligible_patients$result,
+                        age = ordered_b$age_at_diagnosis,
+                        pfi = ordered_b$platinum_free_interval,
+                        dtp = ordered_b$days_to_progression,
+                        dtd = ordered_b$days_to_death)
+  return(finalData)
+  
+}
+```
+
+```{r}
+ggplot(n_of_CA,aes(n))+geom_histogram(bins=length(unique(n_of_CA$n)))+labs(x="Number of CA-125 values", y="Number of patients", title="Number of CA-125 values mesured per patient.")
+ggsave("hist.png", width=7, height=6)
+median(n_of_CA$n)
+```
+
+b)  Make a box plot of the CA-125 values. What is dynamic range and median of the CA-125 values?
+
+```{r}
+ggplot(dataLong, aes(x=result))+geom_boxplot()+scale_x_log10()+ coord_flip() +labs(x="CA-125 value", y="", title="Boxplot of CA-125 values.")
+ggsave("boxplot.png", width=7, height=6)
+```
+
+```{r}
+dynRange(dataLong$result)
+```
+
+```{r}
+median(dataLong$result)
+```
+c)  How many patients are eligible to the analysis approach you have chosen?
+
+```{r}
+eligible_patients <- getEligiblePatients()
+patient_data <- getPatientData(eligible_patients)
+```
+
+
+```{r}
+#fix labels!!
+plotPatients()
+```
+
+```{r}
+scaleResult()
+```
+```{r}
+plotScaledPatients()
+```
+```{r}
+avgChangeRateCA125()
+```
+```{r}
+plot(x=avgChangeRateCA125()$patient_id, y=avgChangeRateCA125()$result)
+```
+
+
+```{r}
+#minDate, maxDate, minTreatment, lambda
+maxDates <- c(max(dataLong$date_relative))
+minTreatments <- c(2)
+lambdas <- c(0.1)
+#finalData <- getFinalData()
+#regression
+#finalData
+#Cox model
+#Kaplan Meier
+finalData <- getFinalData(0, maxDates, minTreatments, lambdas)
+
+finalData
+finalData$dead <-finalData$dtd
+finalData$dead[!is.na(finalData$dead)]<-1
+finalData$dead[is.na(finalData$dead)]<-0
+
+finalData
+```
+```{r}
+model <- lm(dead ~ result, data=finalData)
+summary(model)
+```
+# Predictin overall survival with CA-125 values
+
+```{r}
+ggplot(finalData, aes(x=dead, y=result)) +geom_point() + geom_smooth(method = "lm")
+```
+```{r}
+med_result <- median(finalData$result)
+med_result
+finalData$change_trend <- 'no change'
+finalData$change_trend[finalData$result > 0] <- 'positive'
+finalData$change_trend[finalData$result < 0] <- 'negative'
+model <- survfit(Surv(dtd, dead) ~ change_trend, data = finalData)
+model
+ggsurvplot(model) + labs(title = "Kaplan-Meier survival analysis of overall survival.")
+ggsave("death_km.png", width=7, height=6)
+```
+```{r}
+surv_pvalue(model)$pval
+```
+
+```{r}
+res.cox <- coxph(Surv(dtd, dead) ~ result, data=finalData)
+ggsurvplot(survfit(res.cox), data=finalData)
+```
+```{r}
+summary(res.cox)
+```
+
+```{r}
+finalData$therapy_time <- finalData$dtp-finalData$pfi
+finalData
+```
+```{r}
+ggplot(finalData, aes(x=therapy_time, y =finalData$result)) + geom_point() + geom_smooth(method='lm')
+```
+```{r}
+ggplot(finalData, aes(x=therapy_time, y =finalData$result, group=dead, col=dead)) + geom_point() + geom_smooth(method='lm')
+```
+```{r}
+res.cox <- coxph(Surv(therapy_time, dead) ~ result, data=finalData)
+ggsurvplot(survfit(res.cox), data=finalData)
+```
+```{r}
+summary(res.cox)
+```
+```{r}
+model2 <- survfit(Surv(therapy_time, dead) ~ change_trend, data = finalData)
+model
+ggsurvplot(model2)+ labs(title = "Kaplan-Meier survival analysis of response to chemotherapy.")
+ggsave("response_km.png", width=7, height=6)
+```
+```{r}
+surv_pvalue(model2)$pval
+```
+
+
+
+d) What clinical outcome(s) (as column names in the file clinical_variables.xlsx) would you use  in the analysis of i) chemotherapy response and ii) overall survival?
+
+I would use ``pltainium_free_interval` to estimate chemotherapy response and `days_to_death` to estimate overall survival.
+
