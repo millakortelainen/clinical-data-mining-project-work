@@ -12,9 +12,6 @@ library(survminer)
 dataLong <- read.xlsx("longitudinal.xlsx",sheetIndex=1)
 dataCV <- read.xlsx("clinical_variables.xlsx", sheetIndex = 1)
 ```
-```{r}
-dataCV
-```
 
 ```{r}
 length(unique(dataCV$patient_id))
@@ -168,8 +165,6 @@ ggsave("hist.png", width=7, height=6)
 median(n_of_CA$n)
 ```
 
-b)  Make a box plot of the CA-125 values. What is dynamic range and median of the CA-125 values?
-
 ```{r}
 ggplot(dataLong, aes(x=result))+geom_boxplot()+scale_x_log10()+ coord_flip() +labs(x="CA-125 value", y="", title="Boxplot of CA-125 values.")
 ggsave("boxplot.png", width=7, height=6)
@@ -182,7 +177,6 @@ dynRange(dataLong$result)
 ```{r}
 median(dataLong$result)
 ```
-c)  How many patients are eligible to the analysis approach you have chosen?
 
 ```{r}
 eligible_patients <- getEligiblePatients()
@@ -191,7 +185,6 @@ patient_data <- getPatientData(eligible_patients)
 
 
 ```{r}
-#fix labels!!
 plotPatients()
 ```
 
@@ -210,15 +203,10 @@ plot(x=avgChangeRateCA125()$patient_id, y=avgChangeRateCA125()$result)
 
 
 ```{r}
-#minDate, maxDate, minTreatment, lambda
 maxDates <- c(max(dataLong$date_relative))
 minTreatments <- c(2)
 lambdas <- c(0.1)
-#finalData <- getFinalData()
-#regression
-#finalData
-#Cox model
-#Kaplan Meier
+
 finalData <- getFinalData(0, maxDates, minTreatments, lambdas)
 
 finalData
@@ -232,7 +220,6 @@ finalData
 model <- lm(dead ~ result, data=finalData)
 summary(model)
 ```
-# Predictin overall survival with CA-125 values
 
 ```{r}
 ggplot(finalData, aes(x=dead, y=result)) +geom_point() + geom_smooth(method = "lm")
@@ -245,7 +232,7 @@ finalData$change_trend[finalData$result > 0] <- 'positive'
 finalData$change_trend[finalData$result < 0] <- 'negative'
 model <- survfit(Surv(dtd, dead) ~ change_trend, data = finalData)
 model
-ggsurvplot(model) + labs(title = "Kaplan-Meier survival analysis of overall survival.")
+ggsurvplot(model)
 ggsave("death_km.png", width=7, height=6)
 ```
 ```{r}
@@ -287,9 +274,4 @@ ggsave("response_km.png", width=7, height=6)
 surv_pvalue(model2)$pval
 ```
 
-
-
-d) What clinical outcome(s) (as column names in the file clinical_variables.xlsx) would you use  in the analysis of i) chemotherapy response and ii) overall survival?
-
-I would use ``pltainium_free_interval` to estimate chemotherapy response and `days_to_death` to estimate overall survival.
 
